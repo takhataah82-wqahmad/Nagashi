@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Air Painter Mobile</title>
+<style>
+*{box-sizing:border-box} body{margin:0;background:#10131c;color:#fff;font-family:system-ui,sans-serif;overflow:hidden}
+header{height:54px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#1b2030}
+h1{font-size:17px;margin:0}.tools{display:flex;gap:7px;align-items:center;overflow-x:auto;padding:9px;background:#252c40}
+button{border:0;border-radius:12px;padding:10px 12px;font-size:14px;background:#3a4561;color:white;white-space:nowrap}
+button.active{outline:3px solid #fff}.swatch{width:34px;height:34px;padding:0;border:2px solid #fff;border-radius:50%}
+main{position:relative;width:100vw;height:calc(100dvh - 112px);background:#fff}
+canvas{width:100%;height:100%;display:block;touch-action:none}
+video{position:absolute;right:8px;bottom:8px;width:112px;height:150px;object-fit:cover;transform:scaleX(-1);border:2px solid #fff;border-radius:12px;opacity:.9}
+#status{position:absolute;left:8px;bottom:8px;background:#111c;color:#fff;padding:8px 10px;border-radius:10px;font-size:12px}
+#hint{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#333;padding:25px;pointer-events:none}
+</style>
+</head>
+<body>
+<header><h1>🎨 نقاشی با حرکت دست</h1><span id="state">در انتظار دوربین</span></header>
+<div class="tools">
+  <button class="swatch active" data-color="#e53935" style="background:#e53935" aria-label="قرمز"></button>
+  <button class="swatch" data-color="#1eaa59" style="background:#1eaa59" aria-label="سبز"></button>
+  <button class="swatch" data-color="#2878e8" style="background:#2878e8" aria-label="آبی"></button>
+  <button class="swatch" data-color="#111111" style="background:#111" aria-label="مشکی"></button>
+  <button class="swatch" data-color="#f5c400" style="background:#f5c400" aria-label="زرد"></button>
+  <button id="eraser">پاک‌کن</button><button id="clear">پاک‌کردن صفحه</button>
+  <button id="save">ذخیره PNG</button><button id="start">روشن‌کردن دوربین</button>
+</div>
+<main id="stage">
+ <canvas id="paint"></canvas>
+ <video id="cam" autoplay playsinline muted></video>
+ <div id="hint">برای شروع، «روشن‌کردن دوربین» را بزن.<br>انگشت اشاره را بالا نگه دار و انگشت وسط را پایین؛<br>برای توقف، انگشت وسط را هم بالا ببر.</div>
+ <div id="status">اشاره: نقاشی | اشاره + وسط: توقف</div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script>
+const canvas=document.getElementById('paint'),ctx=canvas.getContext('2d');
+const video=document.getElementById('cam'), hint=document.getElementById('hint');
+const state=document.getElementById('state'), statusBox=document.getElementById('status');
+let color='#e53935', erasing=false, last=null, camera=null, hands=null, busy=false;
+function resize(){
+ const old=document.createElement('canvas'); old.width=canvas.width; old.height=canvas.height;
+ old.getContext('2d').drawImage(canvas,0,0);
+ const r=document.getElementById('stage').getBoundingClientRect();
+ canvas.width=Math.round(r.width*devicePixelRatio); canvas.height=Math.round(r.height*devicePixelRatio);
+ ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+ if(old.width)ctx.drawImage(old,0,0,old.width,old.height,0,0,canvas.width,canvas.height);
+}
+addEventListener('resize',resize); resize();
+document.querySelectorAll('.swatch').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.swatch').forEach(x=>x.classList.remove('active'));
+ b.classList.add('active'); color=b.dataset.color; erasing=false;
+ document.getElementById('eraser').classList.remove('active'); last=null;
+});
+document.getElementById('eraser').onclick=()=>{erasing=!erasing;last=null;document.getElementById('eraser').classList.toggle('active',erasing)};
+document.getElementById('clear').onclick=()=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);last=null};
+document.getElementById('save').onclick=()=>{const a=document.createElement('a');a.download='air-painting.png';a.href=canvas.toDataURL('image/png');a.click()};
+function drawPoint(nx,ny){
+ const x=(1-nx)*canvas.width, y=ny*canvas.height;
+ if(last){
+  ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(x,y);
+  ctx.lineCap='round';ctx.lineJoin='round';ctx.lineWidth=(erasing?34:7)*devicePixelRatio;
+  ctx.strokeStyle=erasing?'#ffffff':color;ctx.stroke();
+ }
+ last={x,y};
+}
+async function start(){
+ const startBtn=document.getElementById('start');startBtn.disabled=true;
+ try{
+  if(!navigator.mediaDevices?.getUserMedia) throw new Error('مرورگر اجازه دسترسی دوربین ندارد. صفحه را با HTTPS در Chrome باز کن.');
+  const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:'user',width:{ideal:640},height:{ideal:480}}});
+  video.srcObject=stream; await video.play();
+  if(!window.Hands) throw new Error('کتابخانه تشخیص دست بارگذاری نشد. اینترنت را بررسی کن و دوباره صفحه را باز کن.');
+  hands=new Hands({locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+  hands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:.6,minTrackingConfidence:.55});
+  hands.onResults(results=>{
+   if(!results.multiHandLandmarks?.length){last=null;state.textContent='دستی دیده نشد';return}
+   const p=results.multiHandLandmarks[0];
+   const indexUp=p[8].y<p[6].y, middleUp=p[12].y<p[10].y;
+   const active=indexUp&&!middleUp;
+   if(active){drawPoint(p[8].x,p[8].y);state.textContent='در حال نقاشی ✍️'}
+   else{last=null;state.textContent='آماده'}
+  });
+  camera=new Camera(video,{onFrame:async()=>{if(!busy){busy=true;try{await hands.send({image:video})}finally{busy=false}}},width:640,height:480});
+  await camera.start();hint.style.display='none';startBtn.textContent='دوربین روشن است';state.textContent='دوربین آماده';
+ }catch(e){alert(e.message||String(e));startBtn.disabled=false;state.textContent='خطا در دوربین'}
+}
+document.getElementById('start').onclick=start;
+</script>
+</body>
+</html>
